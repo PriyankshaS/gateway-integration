@@ -46,6 +46,13 @@ func (s *PaymentService) DepositHandler(w http.ResponseWriter, r *http.Request) 
 		utils.HandleError(w, "Invalid request", http.StatusBadRequest)
 		return
 	}
+	if req.Amount < 0 {
+		utils.HandleError(w, "Amount should be greater than 0", http.StatusBadRequest)
+		return
+	}
+
+	// To do: Validate currency from list of supported currencies
+
 	var response model.TransactionResponse
 	var result interface{}
 	var err error
@@ -84,7 +91,6 @@ func (s *PaymentService) DepositHandler(w http.ResponseWriter, r *http.Request) 
 		utils.HandleError(w, "Unsupported gateway", http.StatusBadRequest)
 		return
 	}
-	// Type assertion to convert interface{} to models.TransactionResponse
 	response, ok := result.(model.TransactionResponse)
 	if !ok {
 		utils.HandleError(w, "Unexpected error", http.StatusBadRequest)
@@ -93,10 +99,13 @@ func (s *PaymentService) DepositHandler(w http.ResponseWriter, r *http.Request) 
 
 	// Save transaction with initial status
 	transaction := &model.Transaction{
-		Amount:   req.Amount,
-		Currency: req.Currency,
-		Status:   "pending",
+		Amount:          req.Amount,
+		Currency:        req.Currency,
+		Status:          "pending",
+		TransactionType: "Payin",
+		Gateway:         req.Gateway,
 	}
+
 	err = s.repository.SaveTransaction(transaction)
 	if err != nil {
 		utils.LogTransaction(err.Error())
@@ -109,13 +118,41 @@ func (s *PaymentService) DepositHandler(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *PaymentService) GatewayACallback(w http.ResponseWriter, r *http.Request) {
-	// Handle asynchronous callbacks from gateway A
+	var req model.CallbackRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		utils.LogTransaction(err.Error())
+		utils.HandleError(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+	if req.TransactionID != "" {
+		//Update transaction status in DB
+		err := s.repository.UpdateTransactionStatus(req.TransactionID, req.Status)
+		if err != nil {
+			utils.LogTransaction(err.Error())
+			utils.HandleError(w, "Failed to save transaction", http.StatusInternalServerError)
+			return
+		}
+	}
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("Callback A received"))
 }
 
 func (s *PaymentService) GatewayBCallback(w http.ResponseWriter, r *http.Request) {
-	// Handle asynchronous callbacks from gateway B
+	var req model.CallbackRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		utils.LogTransaction(err.Error())
+		utils.HandleError(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+	if req.TransactionID != "" {
+		//Update transaction status in DB
+		err := s.repository.UpdateTransactionStatus(req.TransactionID, req.Status)
+		if err != nil {
+			utils.LogTransaction(err.Error())
+			utils.HandleError(w, "Failed to save transaction", http.StatusInternalServerError)
+			return
+		}
+	}
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("Callback B received"))
 }
@@ -141,9 +178,11 @@ func (s *PaymentService) WithdrawHandler(w http.ResponseWriter, r *http.Request)
 
 	// Save transaction status in MongoDB
 	transaction := &model.Transaction{
-		Amount:   req.Amount,
-		Currency: req.Currency,
-		Status:   "pending",
+		Amount:          req.Amount,
+		Currency:        req.Currency,
+		Status:          "pending",
+		TransactionType: "Payout",
+		Gateway:         req.Gateway,
 	}
 	err = s.repository.SaveTransaction(transaction)
 	if err != nil {
